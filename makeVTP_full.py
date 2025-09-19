@@ -248,11 +248,9 @@ def load_inputs(filename):
     print(f'bdf_offset: {bdf_offset}')
 
     OF_FST = input_cfg['OF_FST']
-    OF_ED = input_cfg['OF_ED']
     OF_HD = input_cfg['OF_HD']
-    # OF_MD = input_cfg['OF_MD']
     openfast_outb = input_cfg['openfast_outb']
-    return output_cfg, nastran_model_file, bdf_offset, OF_FST, OF_ED, OF_HD, openfast_outb
+    return output_cfg, nastran_model_file, bdf_offset, OF_FST, OF_HD, openfast_outb
 
 def rotation_matrix_zyx(roll, pitch, yaw):
     """
@@ -280,7 +278,7 @@ def main():
 
     # 2. 설정 파일 읽기
     output_cfg, nastran_model_file, bdf_offset, \
-        OF_FST, OF_ED, OF_HD, openfast_outb = load_inputs('input_data.ini')
+        OF_FST, OF_HD, openfast_outb = load_inputs('input_data.ini')
 
     # 3. 출력 폴더 준비
     path_out = setup_output_folder(output_cfg['path_out'])
