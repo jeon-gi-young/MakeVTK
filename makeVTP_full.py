@@ -272,9 +272,10 @@ def rotation_matrix_zyx(roll, pitch, yaw):
     ])
 
 def main():
-    # 1. 시작 시간 로깅
-    dt_start = datetime.now()
-    print(f"Start time: {dt_start.strftime('%Y-%m-%d %H:%M:%S')}")
+    # 1. 빌드 날짜 및 버전 출력
+    VERSION = "1.0.0"
+    BUILD_DATE = "2025-09-19"  # 실제 빌드 시 날짜로 변경
+    print(f"Code Version: {VERSION}, Build Date: {BUILD_DATE}")
 
     # 2. 설정 파일 읽기
     output_cfg, nastran_model_file, bdf_offset, \
