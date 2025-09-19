@@ -288,10 +288,8 @@ def main():
     # 4. Nastran bulk 데이터 파싱
     nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file)
 
-    # 5. OpenFAST 입력 파일에서 좌표 추출
-    TowerBsHt = extract_tower_base_height(OF_ED)
-    PtfmRef = extract_ptfm_ref_coords(OF_HD)
-    # pointsm = extract_fairlead_coords(OF_MD)
+    # 5. 무게중심 및 회전중심 좌표 추출
+    PtfmRef = extract_ptfm_ref_coords(OF_HD) 
 
     # 7. Paraview 인덱싱
     poly3i, poly4i, npl3, npl4, offset = paraview_indexing(nodes, poly3, poly4)
