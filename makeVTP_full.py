@@ -6,6 +6,9 @@ import pandas as pd
 from pyFAST.input_output.fast_output_file import FASTOutputFile
 
 def read_config(ini_path):
+    if not os.path.exists(ini_path):
+        print(f"Warning: Configuration file '{ini_path}' not found.")
+        raise FileNotFoundError(f"Configuration file '{ini_path}' does not exist.")
     config = configparser.ConfigParser()
     config.read(ini_path, encoding='utf-8')
     input_cfg = config['input']
@@ -137,29 +140,6 @@ def paraview_indexing(nodes, poly3, poly4):
     offset = np.concatenate([offset3, offset4])
     return poly3i, poly4i, npl3, npl4, offset
 
-def transform_coordinates(pointst, pointsc, pointsf, path_out):
-    # Build DataFrame for OpenFAST reference points
-    cnames = ['TwrBsHt', 'COG']
-    pointsfo = pd.DataFrame([pointst, pointsc], columns=['X', 'Y', 'Z'], index=cnames)
-    pointsfo = pointsfo.sort_values(by=['Z', 'X', 'Y'], ascending=[False, False, False])
-    # Sort orphan nodes
-    pointsf_df = pd.DataFrame(pointsf, columns=['X', 'Y', 'Z'])
-    pointsf_df = pointsf_df.sort_values(by=['Z', 'X', 'Y'], ascending=[False, False, False])
-    # Calculate offset
-    points_offset = pointsfo.values - pointsf_df.values
-    points_offset_uniq = np.unique(points_offset, axis=0)
-    if len(points_offset_uniq) != 1:
-        print('Warning: The offsets of OpenFAST and FE model coordinates are not consistent.')
-        print('Check TwrBsHt in ElastoDyn, PtfmRefxt/yt/zt in HydroDyn compared to those nodes on the FE model.')
-        print('The platform nodes are offset for TwrBsHt point.')
-    elif np.allclose(points_offset_uniq, [0, 0, 0]):
-        print('No coordinate offset between OpenFAST and FE model.')
-    # Save offset to CSV
-    pd.DataFrame(points_offset, index=cnames, columns=['X', 'Y', 'Z']).to_csv(os.path.join(path_out, 'points_offset.csv'), sep='\t')
-    # Use TwrBsHt offset vector
-    points_offset_vec = points_offset[cnames.index('TwrBsHt')]
-    return points_offset_vec
-
 def read_openfast_outb(outb_file):
     # Read OpenFAST binary output
     fastout = FASTOutputFile(outb_file)
@@ -189,6 +169,8 @@ def read_fst_for_vtkfps(fst_file):
                     break
     if fps is None or dt is None:
         raise ValueError("VISUALIZATION inputs including VTK_fps in '.fst' file are missing or wrong")
+    # dt, fps 출력
+    print(f"Read from FST: DT = {dt}, VTK_fps = {fps}")
     return dt, fps
 
 def calculate_export_steps(time, dt, fps):
@@ -236,98 +218,122 @@ def write_vtp(filename, points, poly3i, poly4i, offset, npl3, npl4, color=None):
         f.write('  </PolyData>\n')
         f.write('</VTKFile>\n')
 
-def generate_pvsm(path_out, n_data):
-    # This is a minimal template for ParaView state file
-    pvsm_content = f'''<ParaView>
-  <ServerManagerState version="5.10.1">
-    <Proxy group="animation" type="AnimationScene" id="263" servers="16">
-      <Property name="EndTime" id="263.EndTime" number_of_elements="1">
-        <Element index="0" value="{n_data-1}"/>
-      </Property>
-      <Property name="NumberOfFrames" id="263.NumberOfFrames" number_of_elements="1">
-        <Element index="0" value="{n_data}"/>
-      </Property>
-      <!-- Add more animation and coloring properties as needed -->
-    </Proxy>
-    <!-- Add more proxies for sources, representations, coloring, etc. -->
-  </ServerManagerState>
-</ParaView>
-'''
-    pvsm_path = os.path.join(path_out, 'PlatformSurface.pvsm')
-    with open(pvsm_path, 'w') as f:
-        f.write(pvsm_content)
-    print(f'ParaView state file generated: {pvsm_path}')
+# def generate_pvsm(path_out, n_data):
+#     # This is a minimal template for ParaView state file
+#     pvsm_content = f'''<ParaView>
+#   <ServerManagerState version="5.10.1">
+#     <Proxy group="animation" type="AnimationScene" id="263" servers="16">
+#       <Property name="EndTime" id="263.EndTime" number_of_elements="1">
+#         <Element index="0" value="{n_data-1}"/>
+#       </Property>
+#       <Property name="NumberOfFrames" id="263.NumberOfFrames" number_of_elements="1">
+#         <Element index="0" value="{n_data}"/>
+#       </Property>
+#       <!-- Add more animation and coloring properties as needed -->
+#     </Proxy>
+#     <!-- Add more proxies for sources, representations, coloring, etc. -->
+#   </ServerManagerState>
+# </ParaView>
+# '''
+#     pvsm_path = os.path.join(path_out, 'PlatformSurface.pvsm')
+#     with open(pvsm_path, 'w') as f:
+#         f.write(pvsm_content)
+#     print(f'ParaView state file generated: {pvsm_path}')
 
-def main():
-    # Log start time
-    dt_start = datetime.now()
-    print(dt_start)
-    # Read configuration
-    input_cfg, output_cfg = read_config('input_data.ini')
+def load_inputs(filename):
+    input_cfg, output_cfg = read_config(filename)
     nastran_model_file = input_cfg['nastran_model_file']
+    bdf_offset_str = input_cfg.get('bdf_offset', '0,0,0')
+    bdf_offset = np.array([float(x) for x in bdf_offset_str.split(',')])
+    print(f'bdf_offset: {bdf_offset}')
+
     OF_FST = input_cfg['OF_FST']
     OF_ED = input_cfg['OF_ED']
     OF_HD = input_cfg['OF_HD']
-    #OF_MD = input_cfg['OF_MD']
+    # OF_MD = input_cfg['OF_MD']
     openfast_outb = input_cfg['openfast_outb']
-    # Setup output folder
+    return output_cfg, nastran_model_file, bdf_offset, OF_FST, OF_ED, OF_HD, openfast_outb
+
+def rotation_matrix_zyx(roll, pitch, yaw):
+    """
+    ZYX 오일러 각(roll, pitch, yaw)에 대한 회전 행렬 반환
+    roll: X축 회전 [rad]
+    pitch: Y축 회전 [rad]
+    yaw: Z축 회전 [rad]
+    """
+    cy = np.cos(yaw)
+    sy = np.sin(yaw)
+    cp = np.cos(pitch)
+    sp = np.sin(pitch)
+    cr = np.cos(roll)
+    sr = np.sin(roll)
+    return np.array([
+    [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+    [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+    [-sp,   cp*sr,            cp*cr]
+    ])
+
+def main():
+    # 1. 시작 시간 로깅
+    dt_start = datetime.now()
+    print(f"Start time: {dt_start.strftime('%Y-%m-%d %H:%M:%S')}")
+
+    # 2. 설정 파일 읽기
+    output_cfg, nastran_model_file, bdf_offset, \
+        OF_FST, OF_ED, OF_HD, openfast_outb = load_inputs('input_data.ini')
+
+    # 3. 출력 폴더 준비
     path_out = setup_output_folder(output_cfg['path_out'])
-    # Parse Nastran bulk data file
+
+    # 4. Nastran bulk 데이터 파싱
     nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file)
-    # Extract coordinates from OpenFAST input files
-    pointst = extract_tower_base_height(OF_ED)
-    pointsc = extract_ptfm_ref_coords(OF_HD)
-    #pointsm = extract_fairlead_coords(OF_MD)
-    # Orphan node deletion
-    nodes, points, nodesf, pointsf = orphan_node_deletion(nodes, points, poly3, poly4)
-    # Paraview indexing
+
+    # 5. OpenFAST 입력 파일에서 좌표 추출
+    TowerBsHt = extract_tower_base_height(OF_ED)
+    PtfmRef = extract_ptfm_ref_coords(OF_HD)
+    # pointsm = extract_fairlead_coords(OF_MD)
+
+    # 7. Paraview 인덱싱
     poly3i, poly4i, npl3, npl4, offset = paraview_indexing(nodes, poly3, poly4)
-    # Transform coordinates
-    points_offset_vec = transform_coordinates(pointst, pointsc, pointsf, path_out)
-    points = points + points_offset_vec
-    # Read OpenFAST output
+
+    # 8. 좌표 변환
+    points = points + bdf_offset
+
+    # 9. OpenFAST 출력 읽기
     tran, rota, time, ofd = read_openfast_outb(openfast_outb)
-    # Read FST file for time step and frame rate
+
+    # 10. FST 파일에서 시간 및 프레임레이트 읽기
     dt, fps = read_fst_for_vtkfps(OF_FST)
-    # Calculate export steps
+
+    # 11. 내보낼 스텝 계산
     export_indices = calculate_export_steps(time, dt, fps)
     tran_export = tran[export_indices, :]
     rota_export = rota[export_indices, :]
     n_data = len(tran_export)
     n_data_order = 1 + int(np.floor(np.log10(n_data)))
     fname_format = f'PlatformSurface.%0{n_data_order}d.vtp'
-    # Export loop
+
+    # 12. 내보내기 루프
+    print('Exporting VTP sequence...')
+    n_data = len(tran_export)
     for it in range(n_data):
-            # Rigid body 변환: COG(pointsc) 기준 회전 후 이동
-            roll, pitch, yaw = rota_export[it, :]
-            # rota_m = np.array([
-            #     [1, yaw, -pitch],
-            #     [-yaw, 1, roll],
-            #     [-pitch, roll, 1]
-            # ])  # 미소각 근사식 (주석처리)
+        # Rigid body 변환: COG(PtfmRef) 기준 회전 후 이동
+        roll, pitch, yaw = rota_export[it, :]
 
-            # 원래 회전변환 행렬 (ZYX 오일러 각: yaw, pitch, roll)
-            cy = np.cos(yaw)
-            sy = np.sin(yaw)
-            cp = np.cos(pitch)
-            sp = np.sin(pitch)
-            cr = np.cos(roll)
-            sr = np.sin(roll)
+        # 회전변환 행렬 (ZYX 오일러 각: yaw, pitch, roll)
+        rota_m = rotation_matrix_zyx(roll, pitch, yaw)
 
-            rota_m = np.array([
-                [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
-                [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
-                [-sp,   cp*sr,            cp*cr]
-            ])
-            points_centered = points - pointsc
-            points_rot = (rota_m @ points_centered.T).T
-            points_t = points_rot + pointsc
-            points_t = points_t + tran_export[it, :]
-            color = np.tile([255, 255, 0], (npl3 + npl4, 1))  # Yellow
-            fname = os.path.join(path_out, fname_format % it)
-            write_vtp(fname, points_t, poly3i, poly4i, offset, npl3, npl4, color)
-    # Generate ParaView state file
-    generate_pvsm(path_out, n_data)
+        points_centered = points - PtfmRef
+        points_rot = (rota_m @ points_centered.T).T
+        points_t = points_rot + PtfmRef
+        points_t = points_t + tran_export[it, :]
+
+        color = None
+        fname = os.path.join(path_out, fname_format % it)
+        write_vtp(fname, points_t, poly3i, poly4i, offset, npl3, npl4, color)
+
+    # 13. ParaView 상태 파일 생성
+    #generate_pvsm(path_out, n_data)
 
 if __name__ == '__main__':
     main()
