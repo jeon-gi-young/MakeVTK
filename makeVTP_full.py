@@ -218,28 +218,6 @@ def write_vtp(filename, points, poly3i, poly4i, offset, npl3, npl4, color=None):
         f.write('  </PolyData>\n')
         f.write('</VTKFile>\n')
 
-# def generate_pvsm(path_out, n_data):
-#     # This is a minimal template for ParaView state file
-#     pvsm_content = f'''<ParaView>
-#   <ServerManagerState version="5.10.1">
-#     <Proxy group="animation" type="AnimationScene" id="263" servers="16">
-#       <Property name="EndTime" id="263.EndTime" number_of_elements="1">
-#         <Element index="0" value="{n_data-1}"/>
-#       </Property>
-#       <Property name="NumberOfFrames" id="263.NumberOfFrames" number_of_elements="1">
-#         <Element index="0" value="{n_data}"/>
-#       </Property>
-#       <!-- Add more animation and coloring properties as needed -->
-#     </Proxy>
-#     <!-- Add more proxies for sources, representations, coloring, etc. -->
-#   </ServerManagerState>
-# </ParaView>
-# '''
-#     pvsm_path = os.path.join(path_out, 'PlatformSurface.pvsm')
-#     with open(pvsm_path, 'w') as f:
-#         f.write(pvsm_content)
-#     print(f'ParaView state file generated: {pvsm_path}')
-
 def load_inputs(filename):
     input_cfg, output_cfg = read_config(filename)
     nastran_model_file = input_cfg['nastran_model_file']
@@ -271,66 +249,59 @@ def rotation_matrix_zyx(roll, pitch, yaw):
     [-sp,   cp*sr,            cp*cr]
     ])
 
-def main():
-    # 1. 빌드 날짜 및 버전 출력
-    VERSION = "1.0.0"
-    BUILD_DATE = "2025-09-19"  # 실제 빌드 시 날짜로 변경
-    print(f"Code Version: {VERSION}, Build Date: {BUILD_DATE}")
+## Main execution
+# 1. 빌드 날짜 및 버전 출력
+VERSION = "1.0.0"
+BUILD_DATE = "2025-09-19"  # 실제 빌드 시 날짜로 변경
+print(f"Code Version: {VERSION}, Build Date: {BUILD_DATE}")
 
-    # 2. 설정 파일 읽기
-    output_cfg, nastran_model_file, bdf_offset, \
-        OF_FST, OF_HD, openfast_outb = load_inputs('input_data.ini')
+# 2. 설정 파일 읽기
+output_cfg, nastran_model_file, bdf_offset, \
+    OF_FST, OF_HD, openfast_outb = load_inputs('input_data.ini')
 
-    # 3. 출력 폴더 준비
-    path_out = setup_output_folder(output_cfg['path_out'])
+# 3. 출력 폴더 준비
+path_out = setup_output_folder(output_cfg['path_out'])
 
-    # 4. Nastran bulk 데이터 파싱
-    nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file)
+# 4. Nastran bulk 데이터 파싱
+nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file)
 
-    # 5. 무게중심 및 회전중심 좌표 추출
-    PtfmRef = extract_ptfm_ref_coords(OF_HD) 
+# 5. 무게중심 및 회전중심 좌표 추출
+PtfmRef = extract_ptfm_ref_coords(OF_HD) 
 
-    # 7. Paraview 인덱싱
-    poly3i, poly4i, npl3, npl4, offset = paraview_indexing(nodes, poly3, poly4)
+# 7. Paraview 인덱싱
+poly3i, poly4i, npl3, npl4, offset = paraview_indexing(nodes, poly3, poly4)
 
-    # 8. 좌표 변환
-    points = points + bdf_offset
+# 8. 좌표 변환
+points = points + bdf_offset
 
-    # 9. OpenFAST 출력 읽기
-    tran, rota, time, ofd = read_openfast_outb(openfast_outb)
+# 9. OpenFAST 출력 읽기
+tran, rota, time, ofd = read_openfast_outb(openfast_outb)
 
-    # 10. FST 파일에서 시간 및 프레임레이트 읽기
-    dt, fps = read_fst_for_vtkfps(OF_FST)
+# 10. FST 파일에서 시간 및 프레임레이트 읽기
+dt, fps = read_fst_for_vtkfps(OF_FST)
 
-    # 11. 내보낼 스텝 계산
-    export_indices = calculate_export_steps(time, dt, fps)
-    tran_export = tran[export_indices, :]
-    rota_export = rota[export_indices, :]
-    n_data = len(tran_export)
-    n_data_order = 1 + int(np.floor(np.log10(n_data)))
-    fname_format = f'PlatformSurface.%0{n_data_order}d.vtp'
+# 11. 내보낼 스텝 계산
+export_indices = calculate_export_steps(time, dt, fps)
+tran_export = tran[export_indices, :]
+rota_export = rota[export_indices, :]
+n_data = len(tran_export)
+n_data_order = 1 + int(np.floor(np.log10(n_data)))
+fname_format = f'PlatformSurface.%0{n_data_order}d.vtp'
 
-    # 12. 내보내기 루프
-    print('Exporting VTP sequence...')
-    n_data = len(tran_export)
-    for it in range(n_data):
-        # Rigid body 변환: COG(PtfmRef) 기준 회전 후 이동
-        roll, pitch, yaw = rota_export[it, :]
-
-        # 회전변환 행렬 (ZYX 오일러 각: yaw, pitch, roll)
-        rota_m = rotation_matrix_zyx(roll, pitch, yaw)
-
-        points_centered = points - PtfmRef
-        points_rot = (rota_m @ points_centered.T).T
-        points_t = points_rot + PtfmRef
-        points_t = points_t + tran_export[it, :]
-
-        color = None
-        fname = os.path.join(path_out, fname_format % it)
-        write_vtp(fname, points_t, poly3i, poly4i, offset, npl3, npl4, color)
-
-    # 13. ParaView 상태 파일 생성
-    #generate_pvsm(path_out, n_data)
-
-if __name__ == '__main__':
-    main()
+# 12. 내보내기 루프
+print('Exporting VTP sequence...')
+n_data = len(tran_export)
+for it in range(n_data):
+    # Rigid body 변환: COG(PtfmRef) 기준 회전 후 이동
+    roll, pitch, yaw = rota_export[it, :]
+    # 회전변환 행렬 (ZYX 오일러 각: yaw, pitch, roll)
+    rota_m = rotation_matrix_zyx(roll, pitch, yaw)
+    points_centered = points - PtfmRef
+    points_rot = (rota_m @ points_centered.T).T
+    points_t = points_rot + PtfmRef
+    points_t = points_t + tran_export[it, :]
+    color = None
+    fname = os.path.join(path_out, fname_format % it)
+    write_vtp(fname, points_t, poly3i, poly4i, offset, npl3, npl4, color)
+# 13. ParaView 상태 파일 생성
+#generate_pvsm(path_out, n_data)
