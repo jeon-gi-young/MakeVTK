@@ -123,18 +123,18 @@ def orphan_node_deletion(nodes, points, poly3, poly4):
     points = points[~is_orphan, :]
     return nodes, points, nodesf, pointsf
 
-def paraview_indexing(nodes, poly3, poly4):
+def paraview_indexing(nodes, poly3, poly4):#vtk 전처리 작업
     npt = nodes.shape[0]
     nodes_idx = np.arange(npt)
     nodes_with_idx = np.hstack([nodes, nodes_idx.reshape(-1, 1)])
     poly3c = poly3.flatten()
     j3 = [np.where(nodes_with_idx[:, 0] == val)[0][0] for val in poly3c]
-    poly3i = np.array(j3).reshape(poly3.shape)
+    poly3i = np.array(j3).reshape(poly3.shape) #poly3i: paraview indexing된 삼각형 요소
     poly4c = poly4.flatten()
     j4 = [np.where(nodes_with_idx[:, 0] == val)[0][0] for val in poly4c]
-    poly4i = np.array(j4).reshape(poly4.shape)
-    npl3 = poly3i.shape[0]
-    npl4 = poly4i.shape[0]
+    poly4i = np.array(j4).reshape(poly4.shape) #poly4i: paraview indexing된 사각형 요소
+    npl3 = poly3i.shape[0] #number of poly3
+    npl4 = poly4i.shape[0] #number of poly4
     offset3 = 3 * np.arange(1, npl3 + 1)
     offset4 = poly3i.size + 4 * np.arange(1, npl4 + 1)
     offset = np.concatenate([offset3, offset4])
@@ -174,11 +174,17 @@ def read_fst_for_vtkfps(fst_file):
     return dt, fps
 
 def calculate_export_steps(time, dt, fps):
-    dt_out = time[1] - time[0] if len(time) > 1 else dt
+    # dt_export_rate: VTK 프레임레이트(fps)에 맞춰 몇 개의 OpenFAST 스텝마다 내보낼지 결정
+    # 예: fps=10, dt=0.01이면 1초에 10프레임, 1프레임마다 0.1초마다 내보냄
     dt_export_rate = round(1 / fps / dt)
+    # dt_export: 실제 내보낼 프레임 간격 (초)
     dt_export = dt_export_rate * dt
+    # t_export: 내보낼 프레임의 시간 리스트 (0부터 마지막까지 dt_export 간격)
     t_export = np.arange(0, time[-1] + dt_export, dt_export)
+    # export_indices: t_export에 가장 가까운 실제 OpenFAST 출력 인덱스 리스트
     export_indices = [np.argmin(np.abs(time - t)) for t in t_export]
+
+    # 내보낼 인덱스 반환
     return export_indices
 
 def write_vtp(filename, points, poly3i, poly4i, offset, npl3, npl4, color=None):
@@ -263,7 +269,7 @@ output_cfg, nastran_model_file, bdf_offset, \
 path_out = setup_output_folder(output_cfg['path_out'])
 
 # 4. Nastran bulk 데이터 파싱
-nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file)
+nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file) #points: node 좌표
 
 # 5. 무게중심 및 회전중심 좌표 추출
 PtfmRef = extract_ptfm_ref_coords(OF_HD) 
@@ -285,23 +291,27 @@ export_indices = calculate_export_steps(time, dt, fps)
 tran_export = tran[export_indices, :]
 rota_export = rota[export_indices, :]
 n_data = len(tran_export)
-n_data_order = 1 + int(np.floor(np.log10(n_data)))
+n_data_order = 1 + int(np.floor(np.log10(n_data))) # n_data의 자릿수 계산
 fname_format = f'PlatformSurface.%0{n_data_order}d.vtp'
 
 # 12. 내보내기 루프
 print('Exporting VTP sequence...')
 n_data = len(tran_export)
 for it in range(n_data):
-    # Rigid body 변환: COG(PtfmRef) 기준 회전 후 이동
+    # Rigid body 변환: 플랫폼의 무게중심(PtfmRef) 기준으로 회전 및 이동 수행
+    # 1. 현재 스텝의 회전(roll, pitch, yaw) 값 추출
     roll, pitch, yaw = rota_export[it, :]
-    # 회전변환 행렬 (ZYX 오일러 각: yaw, pitch, roll)
+    # 2. ZYX 오일러 각(roll, pitch, yaw)에 대한 회전 행렬 생성
     rota_m = rotation_matrix_zyx(roll, pitch, yaw)
+    # 3. 모든 노드 좌표를 플랫폼 무게중심(PtfmRef) 기준으로 이동 (좌표 원점 이동)
     points_centered = points - PtfmRef
+    # 4. 회전 행렬을 적용하여 좌표 회전
     points_rot = (rota_m @ points_centered.T).T
+    # 5. 다시 무게중심 위치로 복원 (좌표 원점 복귀)
     points_t = points_rot + PtfmRef
+    # 6. 병진 이동 적용
     points_t = points_t + tran_export[it, :]
     color = None
     fname = os.path.join(path_out, fname_format % it)
     write_vtp(fname, points_t, poly3i, poly4i, offset, npl3, npl4, color)
-# 13. ParaView 상태 파일 생성
-#generate_pvsm(path_out, n_data)
+
