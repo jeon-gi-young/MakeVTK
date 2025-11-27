@@ -5,6 +5,17 @@ import numpy as np
 import pandas as pd
 from pyFAST.input_output.fast_output_file import FASTOutputFile
 
+# 1. 빌드 날짜 및 버전 출력
+VERSION = "1.0.0"
+BUILD_DATE = "2025-11-27"  # 실제 빌드 시 날짜로 변경
+# 프로그램 소개 메시지
+print("="*60)
+print(" OpenFAST to VTP Converter ".center(60, "-"))
+print("  Version: {}   Build Date: {}  ".format(VERSION, BUILD_DATE).center(60))
+print("  This program converts OpenFAST simulation outputs".center(60))
+print("  into VTP files for 3D visualization (e.g., ParaView).".center(60))
+print("="*60)
+
 def read_config(ini_path):
     if not os.path.exists(ini_path):
         print(f"Warning: Configuration file '{ini_path}' not found.")
@@ -36,13 +47,13 @@ def parse_nastran_bulk(filename):
                     nt3 += 1
                 elif cardname == 'CQUAD4  ':
                     nq4 += 1
-    nodes = np.full((ngr, 1), np.nan)
-    elems = np.full((nt3 + nq4, 1), np.nan)
-    points = np.full((ngr, 3), np.nan)
-    poly3 = np.full((nt3, 3), np.nan)
-    poly4 = np.full((nq4, 4), np.nan)
+    nodes = np.full((ngr, 1), np.nan) #노드 번호
+    elems = np.full((nt3 + nq4, 1), np.nan) #요소 번호
+    points = np.full((ngr, 3), np.nan) #노드 좌표
+    poly3 = np.full((nt3, 3), np.nan) #CTRIA3 요소 노드 인덱스
+    poly4 = np.full((nq4, 4), np.nan) #CQUAD4 요소 노드 인덱스
     # Second pass: extract data
-    npt, npl3, npl4 = 0, 0, 0
+    npt, npl3, npl4 = 0, 0, 0 #counters
     with open(filename, 'r') as f:
         for line in f:
             if len(line) > 8:
@@ -162,7 +173,7 @@ def read_fst_for_vtkfps(fst_file):
         for line in f:
             parts = line.split()
             if len(parts) > 2:
-                if parts[1] == 'DT':
+                if parts[1] == 'DT_Out':
                     dt = float(parts[0])
                 elif parts[1] == 'VTK_fps':
                     fps = float(parts[0])
@@ -170,17 +181,12 @@ def read_fst_for_vtkfps(fst_file):
     if fps is None or dt is None:
         raise ValueError("VISUALIZATION inputs including VTK_fps in '.fst' file are missing or wrong")
     # dt, fps 출력
-    print(f"Read from FST: DT = {dt}, VTK_fps = {fps}")
+    print(f"Read from FST: DT_out = {dt}, VTK_fps = {fps}")
     return dt, fps
 
-def calculate_export_steps(time, dt, fps):
-    # dt_export_rate: VTK 프레임레이트(fps)에 맞춰 몇 개의 OpenFAST 스텝마다 내보낼지 결정
-    # 예: fps=10, dt=0.01이면 1초에 10프레임, 1프레임마다 0.1초마다 내보냄
-    dt_export_rate = round(1 / fps / dt)
-    # dt_export: 실제 내보낼 프레임 간격 (초)
-    dt_export = dt_export_rate * dt
-    # t_export: 내보낼 프레임의 시간 리스트 (0부터 마지막까지 dt_export 간격)
-    t_export = np.arange(0, time[-1] + dt_export, dt_export)
+def calculate_export_steps(time, fps):    
+    dt_export = 1 / fps  # fps에 맞춘 정확한 간격으로 수정
+    t_export = np.arange(0, time[-1] + dt_export, dt_export)# np.arange 설명: 시작, 끝(미포함), 간격
     # export_indices: t_export에 가장 가까운 실제 OpenFAST 출력 인덱스 리스트
     export_indices = [np.argmin(np.abs(time - t)) for t in t_export]
 
@@ -256,10 +262,6 @@ def rotation_matrix_zyx(roll, pitch, yaw):
     ])
 
 ## Main execution
-# 1. 빌드 날짜 및 버전 출력
-VERSION = "1.0.0"
-BUILD_DATE = "2025-09-19"  # 실제 빌드 시 날짜로 변경
-print(f"Code Version: {VERSION}, Build Date: {BUILD_DATE}")
 
 # 2. 설정 파일 읽기
 output_cfg, nastran_model_file, bdf_offset, \
@@ -287,7 +289,7 @@ tran, rota, time, ofd = read_openfast_outb(openfast_outb)
 dt, fps = read_fst_for_vtkfps(OF_FST)
 
 # 11. 내보낼 스텝 계산
-export_indices = calculate_export_steps(time, dt, fps)
+export_indices = calculate_export_steps(time, fps)
 tran_export = tran[export_indices, :]
 rota_export = rota[export_indices, :]
 n_data = len(tran_export)
@@ -306,7 +308,7 @@ for it in range(n_data):
     # 3. 모든 노드 좌표를 플랫폼 무게중심(PtfmRef) 기준으로 이동 (좌표 원점 이동)
     points_centered = points - PtfmRef
     # 4. 회전 행렬을 적용하여 좌표 회전
-    points_rot = (rota_m @ points_centered.T).T
+    points_rot = points_centered @ rota_m.T
     # 5. 다시 무게중심 위치로 복원 (좌표 원점 복귀)
     points_t = points_rot + PtfmRef
     # 6. 병진 이동 적용
@@ -315,3 +317,4 @@ for it in range(n_data):
     fname = os.path.join(path_out, fname_format % it)
     write_vtp(fname, points_t, poly3i, poly4i, offset, npl3, npl4, color)
 
+print(f"Export completed. \nVTP files({n_data} steps) saved to '{path_out}'.")
