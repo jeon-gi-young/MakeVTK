@@ -233,6 +233,7 @@ def write_vtp(filename, points, poly3i, poly4i, offset, npl3, npl4, color=None):
 def load_inputs(filename):
     input_cfg, output_cfg = read_config(filename)
     nastran_model_file = input_cfg['nastran_model_file']
+    abaqus_model_file = input_cfg['abaqus_model_file']
     bdf_offset_str = input_cfg.get('bdf_offset', '0,0,0')
     bdf_offset = np.array([float(x) for x in bdf_offset_str.split(',')])
     print(f'bdf_offset: {bdf_offset}')
@@ -240,7 +241,7 @@ def load_inputs(filename):
     OF_FST = input_cfg['OF_FST']
     OF_HD = input_cfg['OF_HD']
     openfast_outb = input_cfg['openfast_outb']
-    return output_cfg, nastran_model_file, bdf_offset, OF_FST, OF_HD, openfast_outb
+    return output_cfg, abaqus_model_file, nastran_model_file, bdf_offset, OF_FST, OF_HD, openfast_outb
 
 def rotation_matrix_zyx(roll, pitch, yaw):
     """
@@ -264,14 +265,20 @@ def rotation_matrix_zyx(roll, pitch, yaw):
 ## Main execution
 
 # 2. 설정 파일 읽기
-output_cfg, nastran_model_file, bdf_offset, \
+output_cfg, abaqus_model_file, nastran_model_file, bdf_offset, \
     OF_FST, OF_HD, openfast_outb = load_inputs('input_data.ini')
 
 # 3. 출력 폴더 준비
 path_out = setup_output_folder(output_cfg['path_out'])
 
 # 4. Nastran bulk 데이터 파싱
-nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file) #points: node 좌표
+if nastran_model_file and os.path.exists(nastran_model_file):
+    print(f"Using Nastran model file: {nastran_model_file}")
+    nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file) #points: node 좌표
+# 4. Abaqus 데이터 파싱
+if abaqus_model_file and os.path.exists(abaqus_model_file):
+    print(f"Using Abaqus model file: {abaqus_model_file}")
+    nodes, points, poly3, poly4 =  parse_abaqus_input(abaqus_model_file)
 
 # 5. 무게중심 및 회전중심 좌표 추출
 PtfmRef = extract_ptfm_ref_coords(OF_HD) 
@@ -299,10 +306,10 @@ fname_format = f'PlatformSurface.%0{n_data_order}d.vtp'
 # 12. 내보내기 루프
 print('Exporting VTP sequence...')
 n_data = len(tran_export)
-for it in range(n_data):
+for i in range(n_data):
     # Rigid body 변환: 플랫폼의 무게중심(PtfmRef) 기준으로 회전 및 이동 수행
     # 1. 현재 스텝의 회전(roll, pitch, yaw) 값 추출
-    roll, pitch, yaw = rota_export[it, :]
+    roll, pitch, yaw = rota_export[i, :]
     # 2. ZYX 오일러 각(roll, pitch, yaw)에 대한 회전 행렬 생성
     rota_m = rotation_matrix_zyx(roll, pitch, yaw)
     # 3. 모든 노드 좌표를 플랫폼 무게중심(PtfmRef) 기준으로 이동 (좌표 원점 이동)
@@ -312,9 +319,9 @@ for it in range(n_data):
     # 5. 다시 무게중심 위치로 복원 (좌표 원점 복귀)
     points_t = points_rot + PtfmRef
     # 6. 병진 이동 적용
-    points_t = points_t + tran_export[it, :]
+    points_t = points_t + tran_export[i, :]
     color = None
-    fname = os.path.join(path_out, fname_format % it)
+    fname = os.path.join(path_out, fname_format % i)
     write_vtp(fname, points_t, poly3i, poly4i, offset, npl3, npl4, color)
 
 print(f"Export completed. \nVTP files({n_data} steps) saved to '{path_out}'.")
