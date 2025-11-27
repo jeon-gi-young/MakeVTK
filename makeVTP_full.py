@@ -262,7 +262,7 @@ def rotation_matrix_zyx(roll, pitch, yaw):
     [-sp,   cp*sr,            cp*cr]
     ])
 
-## Main execution
+## Main execution ##
 
 # 2. 설정 파일 읽기
 output_cfg, abaqus_model_file, nastran_model_file, bdf_offset, \
@@ -276,9 +276,9 @@ if nastran_model_file and os.path.exists(nastran_model_file):
     print(f"Using Nastran model file: {nastran_model_file}")
     nodes, points, poly3, poly4 = parse_nastran_bulk(nastran_model_file) #points: node 좌표
 # 4. Abaqus 데이터 파싱
-if abaqus_model_file and os.path.exists(abaqus_model_file):
-    print(f"Using Abaqus model file: {abaqus_model_file}")
-    nodes, points, poly3, poly4 =  parse_abaqus_input(abaqus_model_file)
+# if abaqus_model_file and os.path.exists(abaqus_model_file):
+#     print(f"Using Abaqus model file: {abaqus_model_file}")
+#     nodes, points, poly3, poly4 =  parse_abaqus_input(abaqus_model_file)
 
 # 5. 무게중심 및 회전중심 좌표 추출
 PtfmRef = extract_ptfm_ref_coords(OF_HD) 
